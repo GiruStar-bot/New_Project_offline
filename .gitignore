@@ -1,0 +1,4 @@
+.godot/
+*.uid
+*.import
+builds/
