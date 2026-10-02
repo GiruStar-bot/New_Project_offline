@@ -1,0 +1,248 @@
+extends Control
+## Coordinator for the new milestone. Legacy scenes/main.tscn remains standalone.
+
+const World = preload("res://scripts/world/world_state.gd")
+const MapView = preload("res://scripts/world/map_view.gd")
+const UI = preload("res://scripts/ui/ui.gd")
+var world: RefCounted = World.new()
+var map_view: SubViewportContainer
+var selected_entity: int = -1
+var selected_site: int = -1
+var patrol_mode: bool = false
+var title_label: Label
+var details_label: Label
+var area_label: Label
+var verdict_label: Label
+var clock_label: Label
+var notice_label: Label
+var log_label: RichTextLabel
+var pause_button: Button
+var patrol_button: Button
+var halt_button: Button
+var begin_button: Button
+var example_button: Button
+var cancel_button: Button
+var submit_button: Button
+var evaluation: Dictionary = {}
+var panel_elapsed: float = 0.0
+
+func _ready() -> void:
+	theme = UI.theme()
+	var font: SystemFont = SystemFont.new()
+	font.font_names = PackedStringArray(["Yu Gothic", "Meiryo", "Noto Sans CJK JP"])
+	theme.default_font = font
+	var margin: MarginContainer = MarginContainer.new()
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 16)
+	add_child(margin)
+	var column: VBoxContainer = VBoxContainer.new()
+	column.add_theme_constant_override("separation", 8)
+	margin.add_child(column)
+	var header: HBoxContainer = HBoxContainer.new()
+	column.add_child(header)
+	var title: Label = UI.label_text("FRONTIER COUNCIL", 25, UI.GOLD)
+	title.autowrap_mode = TextServer.AUTOWRAP_OFF
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title)
+	clock_label = UI.label_text("", 15, UI.TEAL)
+	clock_label.custom_minimum_size.x = 185
+	header.add_child(clock_label)
+	pause_button = _button("一時停止", _toggle_pause)
+	header.add_child(pause_button)
+	for value in [1, 2, 4]:
+		header.add_child(_button("%d×" % value, func() -> void: world.set_speed(value)))
+	header.add_child(_button("初期化", _reset_world))
+	column.add_child(UI.label_text("連続した世界  /  左クリック：選択　右クリック：移動　中ボタンドラッグ：地図移動　ホイール：拡大縮小　Space：停止", 13, UI.MUTED))
+	var row: HBoxContainer = HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	row.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	column.add_child(row)
+	map_view = MapView.new()
+	map_view.custom_minimum_size = Vector2(650, 470)
+	map_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	map_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	map_view.world = world
+	row.add_child(map_view)
+	map_view.person_selected.connect(_select_person)
+	map_view.site_selected.connect(_select_site)
+	map_view.destination_requested.connect(_destination)
+	map_view.border_point_moved.connect(world.move_border_point)
+	map_view.border_point_inserted.connect(world.insert_border_point)
+	map_view.border_point_removed.connect(world.remove_border_point)
+	# Scrollable sidebar keeps controls reachable on smaller windows.
+	var scroll: ScrollContainer = ScrollContainer.new()
+	scroll.custom_minimum_size.x = 322
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	row.add_child(scroll)
+	var sidebar: VBoxContainer = VBoxContainer.new()
+	sidebar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sidebar.add_theme_constant_override("separation", 7)
+	scroll.add_child(sidebar)
+	title_label = UI.label_text("", 21, UI.GOLD)
+	sidebar.add_child(title_label)
+	details_label = UI.label_text("", 14)
+	details_label.custom_minimum_size.y = 80
+	sidebar.add_child(details_label)
+	var commands: HBoxContainer = HBoxContainer.new()
+	sidebar.add_child(commands)
+	halt_button = _button("命令解除", _halt)
+	patrol_button = _button("巡回先を指定", _choose_patrol)
+	commands.add_child(halt_button)
+	commands.add_child(patrol_button)
+	sidebar.add_child(_button("地図全体を表示", func() -> void: map_view.fit_map()))
+	sidebar.add_child(HSeparator.new())
+	sidebar.add_child(UI.label_text("土地交換の交渉", 20, UI.GOLD))
+	sidebar.add_child(UI.label_text("国境は地形や人物の所属と別の状態です。青緑は自国の取得、赤は相手国の取得を表します。", 13, UI.MUTED))
+	begin_button = _button("国境の提案を開始", _begin)
+	sidebar.add_child(begin_button)
+	example_button = _button("同面積の試案を作る", _example)
+	sidebar.add_child(example_button)
+	area_label = UI.label_text("", 15, UI.TEAL)
+	sidebar.add_child(area_label)
+	verdict_label = UI.label_text("", 14)
+	verdict_label.custom_minimum_size.y = 50
+	sidebar.add_child(verdict_label)
+	submit_button = _button("相手国に提案する", _submit)
+	cancel_button = _button("提案を取り消す", _cancel)
+	sidebar.add_child(submit_button)
+	sidebar.add_child(cancel_button)
+	sidebar.add_child(UI.label_text("丸い点：ドラッグで移動\n線をダブルクリック：点を追加\n点を右クリック：削除\n四角い両端：固定 / 標石に吸着", 13, UI.MUTED))
+	sidebar.add_child(UI.label_text("相手国の仮判断：取得面積が譲渡面積の95%以上なら合意。村・城塞・無所属地域は交換対象外です。", 12, UI.MUTED))
+	column.add_child(UI.label_text("● 青緑：自国人物　● 赤：他国人物　● 淡黄：無所属　■：兵士　薄い実線：確定国境　黄色の線：提案", 12, UI.MUTED))
+	notice_label = UI.label_text("人物を選んで移動を指示するか、右の「同面積の試案を作る」から国境交渉を試してください。", 14, UI.GOLD)
+	column.add_child(notice_label)
+	log_label = RichTextLabel.new()
+	log_label.custom_minimum_size.y = 64
+	log_label.add_theme_font_size_override("normal_font_size", 13)
+	log_label.add_theme_color_override("default_color", UI.MUTED)
+	log_label.scroll_following = true
+	column.add_child(log_label)
+	world.changed.connect(_state_changed)
+	_state_changed()
+
+func _button(value: String, action: Callable) -> Button:
+	var button: Button = UI.button(value, action)
+	button.focus_mode = Control.FOCUS_NONE
+	return button
+
+func _process(delta: float) -> void:
+	world.advance(delta)
+	panel_elapsed += delta
+	if panel_elapsed >= 0.2:
+		panel_elapsed = 0
+		_update_panel()
+
+func _unhandled_key_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_SPACE:
+		_toggle_pause()
+		get_viewport().set_input_as_handled()
+
+func _state_changed() -> void:
+	evaluation = world.treaty.evaluate()
+	map_view.update_assessment()
+	_update_panel()
+	log_label.text = "世界の記録\n" + "\n".join(world.journal.slice(maxi(0, world.journal.size() - 8)))
+
+func _update_panel() -> void:
+	clock_label.text = "%02d:%02d  /  %d× %s" % [int(world.elapsed) / 60, int(world.elapsed) % 60, world.speed, "停止中" if world.paused else "進行中"]
+	pause_button.text = "再開 [Space]" if world.paused else "一時停止 [Space]"
+	var can_command: bool = selected_entity >= 0 and world.entities[selected_entity].owner == "council" and world.treaty.draft.is_empty()
+	halt_button.disabled = not can_command
+	patrol_button.disabled = not can_command
+	patrol_button.text = "巡回先を右クリック" if patrol_mode else "巡回先を指定"
+	if selected_entity >= 0:
+		var entity: Dictionary = world.entities[selected_entity]
+		title_label.text = str(entity.name) + " / " + str(entity.role)
+		details_label.text = "所属：%s　人物ID：%d\n所在地：%s\n座標：%.0f, %.0f　行動：%s\n%s" % [_owner_name(entity.owner), entity.id, _owner_name(world.treaty.owner_at(entity.position)), entity.position.x, entity.position.y, entity.order, "右クリックで移動を指示できます。" if entity.owner == "council" else "他国・無所属の人物は情報確認のみ。"]
+	elif selected_site >= 0:
+		var site: Dictionary = world.sites[selected_site]
+		title_label.text = site.name
+		details_label.text = "%s / %s\n座標：%.0f, %.0f\nこの段階では拠点の建設・譲渡は扱いません。" % [site.kind, _owner_name(site.owner), site.position.x, site.position.y]
+	else:
+		title_label.text = "地図を見渡す"
+		details_label.text = "2国家・5拠点・24人\n海と崖は通行不可。川は石橋から渡れます。国境を越えても人物の所属は変わりません。"
+	var editing: bool = not world.treaty.draft.is_empty()
+	begin_button.disabled = editing
+	cancel_button.disabled = not editing
+	submit_button.disabled = not editing or not evaluation.get("valid", false)
+	area_label.text = "自国の取得：%.0f\n相手国の取得：%.0f　/　条約 #%d" % [evaluation.get("council_gain", 0.0), evaluation.get("rival_gain", 0.0), world.treaty.revision]
+	verdict_label.text = str(evaluation.get("reason", ""))
+	verdict_label.add_theme_color_override("font_color", UI.TEAL if evaluation.get("accepted", false) else UI.MUTED)
+	map_view.artwork.selected_entity = selected_entity
+	map_view.artwork.selected_site = selected_site
+
+func _select_person(id: int) -> void:
+	selected_entity = id
+	selected_site = -1
+	patrol_mode = false
+	_update_panel()
+
+func _select_site(id: int) -> void:
+	selected_site = id
+	selected_entity = -1
+	patrol_mode = false
+	_update_panel()
+
+func _destination(point: Vector2) -> void:
+	var result: Dictionary = world.issue_patrol(selected_entity, point) if patrol_mode else world.issue_move(selected_entity, point)
+	notice_label.text = result.reason
+	if result.ok:
+		patrol_mode = false
+	_update_panel()
+
+func _choose_patrol() -> void:
+	patrol_mode = not patrol_mode
+	notice_label.text = "右クリックで巡回の折り返し地点を指定してください。" if patrol_mode else "巡回先の指定を解除しました。"
+	_update_panel()
+
+func _halt() -> void:
+	notice_label.text = world.halt(selected_entity).reason
+	patrol_mode = false
+	_update_panel()
+
+func _toggle_pause() -> void:
+	world.set_paused(not world.paused)
+
+func _begin() -> void:
+	patrol_mode = false
+	world.begin_proposal()
+	notice_label.text = "黄色い線の丸い点をドラッグして交換案を作成してください。"
+
+func _example() -> void:
+	patrol_mode = false
+	world.example_proposal()
+	notice_label.text = "同面積の交換案です。点を調整するか「相手国に提案する」で提出してください。"
+
+func _submit() -> void:
+	var result: Dictionary = world.submit_proposal()
+	notice_label.text = "土地交換に合意しました。両国の領土を更新しました。" if result.accepted else result.reason
+
+func _cancel() -> void:
+	world.cancel_proposal()
+	notice_label.text = "提案を取り消しました。確定済みの国境は元のままです。"
+
+func _reset_world() -> void:
+	world.changed.disconnect(_state_changed)
+	# Reconnect signal targets to the replacement authoritative model.
+	map_view.border_point_moved.disconnect(world.move_border_point)
+	map_view.border_point_inserted.disconnect(world.insert_border_point)
+	map_view.border_point_removed.disconnect(world.remove_border_point)
+	world = World.new()
+	map_view.configure(world)
+	map_view.border_point_moved.connect(world.move_border_point)
+	map_view.border_point_inserted.connect(world.insert_border_point)
+	map_view.border_point_removed.connect(world.remove_border_point)
+	world.changed.connect(_state_changed)
+	selected_entity = -1
+	selected_site = -1
+	patrol_mode = false
+	map_view.dragging_point = -1
+	map_view.panning = false
+	map_view.artwork.hovered_entity = -1
+	map_view.fit_map()
+	notice_label.text = "新しい世界を開始しました。"
+	_state_changed()
+
+func _owner_name(owner: String) -> String:
+	return "評議国（自国）" if owner == "council" else ("東方国" if owner == "rival" else ("海" if owner == "sea" else "無所属"))
