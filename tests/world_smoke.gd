@@ -51,7 +51,7 @@ func _run() -> void:
 	check(world.tick_count == 5 and world.entities[0].position != before, "Resume executes queued command")
 	world.set_speed(4)
 	world.advance(0.5)
-	check(world.tick_count == 25 and is_equal_approx(world.elapsed, 2.5), "4x clock advances once per tick")
+	check(world.tick_count == 25 and is_equal_approx(world.elapsed, 75.0), "4x clock advances once per tick at 30 game seconds/real second")
 	check(not world.set_speed(3) and world.speed == 4, "Unsupported speed rejected")
 	world.advance(20)
 	check(world.entities[0].position.is_equal_approx(Vector2(1050, 800)) and world.entities[0].order == "待機", "Movement finishes precisely")
@@ -126,6 +126,8 @@ func _run() -> void:
 	bounds_world.move_border_point(1, Vector2(150, 450))
 	check(not bounds_world.treaty.evaluate().valid, "Interior handle cannot split country at coastline")
 	var before_tick: int = bounds_world.tick_count
+	bounds_world.cancel_proposal()
+	bounds_world.end_political_turn()
 	bounds_world.set_speed(2)
 	bounds_world.advance(0.5)
 	check(bounds_world.tick_count == before_tick + 10, "2x fixed timestep")

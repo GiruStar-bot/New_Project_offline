@@ -105,7 +105,7 @@ func _run() -> void:
 	key.pressed = true
 	root.push_input(key)
 	await frames()
-	check(not scene.world.paused, "Space controls global clock without activating focused button")
+	check(scene.world.political_turn and scene.world.is_time_stopped(), "Space cannot bypass political-turn pause")
 	check(scene.world.treaty.revision == 0, "Map/sidebar interactions do not accidentally submit treaty")
 	scene.queue_free()
 	await frames()

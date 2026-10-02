@@ -91,6 +91,16 @@ func _draw() -> void:
 				draw_arc(location, radius, 0, TAU, 20, color, 2.0 / view_zoom)
 	for site in world.sites:
 		_draw_site(site)
+	# Only already-developed worksites, never undiscovered mineral deposits.
+	for site in world.economy.worksites:
+		var point: Vector2 = site.position
+		if site.kind == "farm":
+			draw_rect(Rect2(point - Vector2(28, 16), Vector2(56, 32)), Color("a9a46b"))
+			for offset in [-10, 0, 10]:
+				draw_line(point + Vector2(-23, offset), point + Vector2(23, offset), Color("726d42"), 2)
+		else:
+			draw_circle(point, 13, Color("736c5c") if site.kind == "stone" else Color("466447"))
+		_text(point + Vector2(0, -24), "農地" if site.kind == "farm" else site.name, Color("e5d4ab"), 18)
 	if selected_entity >= 0:
 		var entity: Dictionary = world.entities[selected_entity]
 		var route: PackedVector2Array = PackedVector2Array([entity.position])
@@ -130,6 +140,8 @@ func _draw_person(entity: Dictionary) -> void:
 	else:
 		draw_circle(point, 8, color)
 		draw_circle(point + Vector2(0, -7), 4, Color("e9d6b1"))
+	if world.shipments.has(str(entity.id)) and world.shipments[str(entity.id)].phase != "pickup":
+		draw_rect(Rect2(point + Vector2(9, -5), Vector2(8, 8)), Color("ffe5a1"))
 	if int(entity.id) == selected_entity or int(entity.id) == hovered_entity:
 		draw_arc(point, 12 / view_zoom, 0, TAU, 24, Color("ffe5a1"), 2 / view_zoom)
 		_text(point + Vector2(0, -21 / view_zoom), entity.name, Color("fff0bc"), roundi(15 / view_zoom))
